@@ -7,7 +7,7 @@ data:
   processed: data/processed
   window_seconds: 4          # tuned between 2 and 8 s on validation
   frames_per_window: 10
-  video_offset_s: 0.0        # video start relative to EEG start; check on real DROZY files
+  video_offset_s: auto       # video start minus EEG start in seconds; "auto" = from EDF + timestamp files
 
 labels:
   # DROZY / field data: session KSS rating

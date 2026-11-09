@@ -21,9 +21,32 @@ from pathlib import Path
 
 import numpy as np
 
-from .drozy import DrozySession, discover_sessions, kss_to_label, load_eeg
+from .drozy import DrozySession, discover_sessions, kss_to_label, load_eeg, read_frame_times
 from .eeg import band_powers, make_windows, preprocess_raw
-from .video import video_info, window_frame_indices
+from .video import video_info, window_frame_indices, window_frame_indices_from_times
+
+MAX_AUTO_OFFSET_S = 120.0
+
+
+def video_offset(session: DrozySession, raw, setting) -> float:
+    """Seconds between EEG start and first video frame (positive = video starts later).
+
+    With ``setting == "auto"`` it is computed from the EDF start time and the
+    first timestamp in the session's timestamp file (both local wall-clock time).
+    Implausible values (over 2 minutes) fall back to 0 with a warning.
+    """
+    if setting != "auto":
+        return float(setting)
+    meas = raw.info.get("meas_date")
+    if session.timestamps_path is None or meas is None:
+        print(f"[warn] {session.name}: cannot compute video offset automatically, using 0")
+        return 0.0
+    _, first_frame = read_frame_times(session.timestamps_path)
+    offset = (first_frame - meas.replace(tzinfo=None)).total_seconds()
+    if abs(offset) > MAX_AUTO_OFFSET_S:
+        print(f"[warn] {session.name}: computed video offset {offset:.1f} s looks wrong, using 0")
+        return 0.0
+    return offset
 
 
 def prepare_session(session: DrozySession, cfg: dict) -> dict:
@@ -37,12 +60,19 @@ def prepare_session(session: DrozySession, cfg: dict) -> dict:
 
     windows, keep = make_windows(data, sfreq, window_s, max_ptp=e["reject_ptp_uv"] * 1e-6)
 
-    fps = float("nan")
+    fps, offset = float("nan"), float("nan")
     if session.video_path is not None:
-        # keep only windows whose frames all fall inside the video
         fps, n_frames = video_info(session.video_path)
-        frame_idx = window_frame_indices(len(windows), fps, window_s, d["frames_per_window"],
-                                         d["video_offset_s"])
+        offset = video_offset(session, raw, d["video_offset_s"])
+        if session.timestamps_path is not None:
+            times, _ = read_frame_times(session.timestamps_path)
+            times = times[:n_frames]
+            frame_idx = window_frame_indices_from_times(len(windows), times, window_s,
+                                                        d["frames_per_window"], offset)
+        else:
+            frame_idx = window_frame_indices(len(windows), fps, window_s,
+                                             d["frames_per_window"], offset)
+        # keep only windows whose frames all fall inside the video
         inside = ((frame_idx >= 0) & (frame_idx < n_frames)).all(axis=1)
         windows, keep, frame_idx = windows[inside], keep[inside], frame_idx[inside]
     else:
@@ -62,6 +92,7 @@ def prepare_session(session: DrozySession, cfg: dict) -> dict:
         "sfreq": sfreq,
         "channels": np.array(raw.ch_names),
         "fps": fps,
+        "video_offset_s": offset,
     }
 
 

@@ -6,12 +6,19 @@ tests (PVT) with increasing sleep deprivation. A session is named
 
 * a polysomnography recording (EDF) with EEG channels Fz, Cz, C3, C4, Pz plus
   EOG, ECG and EMG, sampled at 512 Hz
-* a Kinect v2 near-infrared intensity video
+* a Kinect v2 near-infrared intensity video (``videos_i8/<s>-<t>.mp4``),
+  512x424, 30 fps, except tests 2 and 3 of subjects 1-8 which are 15 fps
+* a per-frame timestamp file (``timestamps/<s>-<t>.txt``), one line per frame:
+  ``year month day hours minutes seconds milliseconds elapsed_ms``. Some frames
+  were dropped, so frame times must come from this file, not from the fps.
 * one KSS rating (1-9), stored for all sessions in ``KSS.txt``
 
-Some sessions are missing in the release, so every lookup here tolerates gaps.
-File names are matched by the ``<subject>-<test>`` stem anywhere under the
-dataset root, so the exact folder names in the download do not matter.
+Tests 9-1, 10-2, 12-2, 12-3 and 13-3 were lost and test 7-1 never happened
+(KSS written as 0), so every lookup here tolerates gaps. File names are matched
+by the ``<subject>-<test>`` stem anywhere under the dataset root, so the exact
+folder names in the download do not matter.
+
+Format reference: https://www.drozy.ulg.ac.be/
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ class DrozySession:
     edf_path: Path
     video_path: Path | None
     kss: int | None
+    timestamps_path: Path | None = None
 
     @property
     def name(self) -> str:
@@ -49,7 +57,8 @@ def parse_kss(path: str | Path) -> dict[tuple[int, int], int]:
 
     Line ``i`` (1-based) holds subject ``i``'s ratings for tests 1, 2, 3,
     separated by spaces, tabs, commas or semicolons. Missing ratings may be
-    written as ``NaN``, ``-``, ``x`` or left empty; they are skipped.
+    written as ``NaN``, ``-``, ``x`` or left empty; they are skipped. DROZY
+    writes ``0`` for test 7-1, which never took place, so ``0`` is skipped too.
     """
     ratings: dict[tuple[int, int], int] = {}
     lines = [ln for ln in Path(path).read_text().splitlines() if ln.strip()]
@@ -59,7 +68,7 @@ def parse_kss(path: str | Path) -> dict[tuple[int, int], int]:
                 value = float(token)
             except ValueError:
                 continue
-            if np.isnan(value):
+            if np.isnan(value) or value == 0:
                 continue
             if not 1 <= value <= 9:
                 raise ValueError(f"KSS {value} out of range for session {subject}-{test}")
@@ -72,12 +81,28 @@ def kss_to_label(kss: int, decline_min: int = 7) -> int:
     return int(kss >= decline_min)
 
 
-def _index_by_stem(root: Path, exts: tuple[str, ...]) -> dict[str, Path]:
+def _index_by_stem(root: Path, exts: tuple[str, ...], folder: str | None = None) -> dict[str, Path]:
     found: dict[str, Path] = {}
     for p in root.rglob("*"):
         if p.suffix.lower() in exts and SESSION_RE.match(p.stem):
-            found.setdefault(p.stem, p)
+            if folder is None or p.parent.name.lower() == folder:
+                found.setdefault(p.stem, p)
     return found
+
+
+def read_frame_times(path: str | Path) -> tuple[np.ndarray, "datetime"]:
+    """Parse a DROZY timestamp file.
+
+    Returns ``(elapsed_s, first_frame_time)``: per-frame seconds since the
+    first frame, and the wall-clock time of the first frame.
+    """
+    from datetime import datetime
+
+    rows = np.loadtxt(path, ndmin=2)
+    y, mo, d, h, mi, s, ms = (int(v) for v in rows[0, :7])
+    start = datetime(y, mo, d, h, mi, s, ms * 1000)
+    elapsed = (rows[:, 7] - rows[0, 7]) / 1000.0
+    return elapsed, start
 
 
 def discover_sessions(root: str | Path, kss_file: str = "KSS.txt") -> list[DrozySession]:
@@ -90,11 +115,13 @@ def discover_sessions(root: str | Path, kss_file: str = "KSS.txt") -> list[Drozy
     kss = parse_kss(kss_paths[0]) if kss_paths else {}
     edfs = _index_by_stem(root, (".edf",))
     videos = _index_by_stem(root, VIDEO_EXTS)
+    stamps = _index_by_stem(root, (".txt",), folder="timestamps")
 
     sessions = []
     for stem, edf in edfs.items():
         subject, test = map(int, SESSION_RE.match(stem).groups())
-        sessions.append(DrozySession(subject, test, edf, videos.get(stem), kss.get((subject, test))))
+        sessions.append(DrozySession(subject, test, edf, videos.get(stem), kss.get((subject, test)),
+                                     stamps.get(stem)))
     return sorted(sessions, key=lambda s: (s.subject, s.test))
 
 

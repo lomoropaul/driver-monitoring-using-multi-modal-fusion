@@ -36,6 +36,24 @@ def window_frame_indices(n_windows: int, fps: float, window_s: float = 4.0,
     return np.floor((starts + centres - offset_s) * fps).astype(np.int64)
 
 
+def window_frame_indices_from_times(n_windows: int, frame_times: np.ndarray, window_s: float = 4.0,
+                                    frames_per_window: int = 10, offset_s: float = 0.0) -> np.ndarray:
+    """Like :func:`window_frame_indices`, but using measured per-frame times.
+
+    ``frame_times`` are seconds since the first frame (DROZY timestamp files),
+    which handles dropped frames and the 15 fps sessions. Each target time gets
+    the nearest frame; targets outside the video get ``-1``.
+    """
+    starts = np.arange(n_windows)[:, None] * window_s
+    centres = (np.arange(frames_per_window) + 0.5) * window_s / frames_per_window
+    targets = starts + centres - offset_s
+    pos = np.clip(np.searchsorted(frame_times, targets), 1, len(frame_times) - 1)
+    left, right = frame_times[pos - 1], frame_times[pos]
+    idx = np.where(targets - left <= right - targets, pos - 1, pos).astype(np.int64)
+    idx[(targets < frame_times[0]) | (targets > frame_times[-1])] = -1
+    return idx
+
+
 def read_frames(path: str | Path, indices: np.ndarray, gray: bool = True) -> np.ndarray:
     """Read the given frame indices (any shape) into an array ``[*indices.shape, H, W]``."""
     import cv2

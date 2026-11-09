@@ -1,18 +1,22 @@
 """Tests for the DROZY pipeline using small synthetic files with DROZY's layout."""
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
 import pytest
 import yaml
 
-from driver_monitoring.data.drozy import discover_sessions, kss_to_label, load_eeg, parse_kss
+from driver_monitoring.data.drozy import (discover_sessions, kss_to_label, load_eeg, parse_kss,
+                                         read_frame_times)
 from driver_monitoring.data.eeg import band_powers, make_windows, zscore_per_subject
 from driver_monitoring.data.prepare import load_prepared, prepare_drozy
-from driver_monitoring.data.video import read_frames, window_frame_indices
+from driver_monitoring.data.video import (read_frames, window_frame_indices,
+                                          window_frame_indices_from_times)
 
 CFG = yaml.safe_load((Path(__file__).parents[1] / "configs" / "default.yaml").read_text())
 SFREQ, SECONDS, FPS = 512, 22, 30
+EDF_START = datetime(2015, 3, 2, 14, 30, 0)
 
 
 def _write_edf(path: Path, seconds: float = SECONDS, alpha_hz: float = 10.0) -> None:
@@ -23,8 +27,21 @@ def _write_edf(path: Path, seconds: float = SECONDS, alpha_hz: float = 10.0) -> 
     names = ["EEG Fz", "EEG Cz", "EEG C3", "EEG C4", "EEG Pz", "EOG-V", "ECG"]
     data = rng.normal(0, 5e-6, (len(names), t.size)) + 20e-6 * np.sin(2 * np.pi * alpha_hz * t)
     info = mne.create_info(names, SFREQ, ["eeg"] * 5 + ["eog", "ecg"])
-    mne.export.export_raw(path, mne.io.RawArray(data, info, verbose="error"), fmt="edf",
-                          overwrite=True, verbose="error")
+    raw = mne.io.RawArray(data, info, verbose="error")
+    raw.set_meas_date(EDF_START.replace(tzinfo=timezone.utc))
+    mne.export.export_raw(path, raw, fmt="edf", overwrite=True, verbose="error")
+
+
+def _write_timestamps(path: Path, start: datetime, seconds: float, fps: float, drop_every=0) -> None:
+    lines = []
+    for i in range(int(seconds * fps)):
+        if drop_every and i % drop_every == drop_every - 1:
+            continue  # simulate a dropped frame
+        elapsed = i * 1000.0 / fps
+        t = start + timedelta(milliseconds=elapsed)
+        lines.append(f"{t.year} {t.month} {t.day} {t.hour} {t.minute} {t.second} "
+                     f"{t.microsecond // 1000} {elapsed:.0f}")
+    path.write_text("\n".join(lines) + "\n")
 
 
 def _write_video(path: Path, seconds: float) -> None:
@@ -55,6 +72,37 @@ def test_parse_kss_skips_missing(tmp_path):
     p = tmp_path / "KSS.txt"
     p.write_text("3 6 8\n2\tNaN\t9\n\n4,5,-\n")
     assert parse_kss(p) == {(1, 1): 3, (1, 2): 6, (1, 3): 8, (2, 1): 2, (2, 3): 9, (3, 1): 4, (3, 2): 5}
+
+
+def test_parse_kss_skips_zero_placeholder(tmp_path):
+    p = tmp_path / "KSS.txt"
+    p.write_text("\n".join(["3 6 8"] * 6 + ["0 7 9"]) + "\n")  # DROZY: test 7-1 = 0
+    kss = parse_kss(p)
+    assert (7, 1) not in kss and kss[(7, 2)] == 7
+
+
+def test_frame_times_handle_dropped_frames(tmp_path):
+    p = tmp_path / "1-1.txt"
+    _write_timestamps(p, EDF_START, seconds=10, fps=30, drop_every=4)
+    times, start = read_frame_times(p)
+    assert start == EDF_START and times[0] == 0
+    idx = window_frame_indices_from_times(2, times, window_s=4, frames_per_window=10)
+    # each chosen frame is within one frame period of its target time
+    targets = (np.arange(2)[:, None] * 4 + (np.arange(10) + 0.5) * 0.4).ravel()
+    assert np.abs(times[idx.ravel()] - targets).max() <= 1 / 30 + 1e-9
+    past_end = window_frame_indices_from_times(3, times, window_s=4, frames_per_window=10)
+    assert (past_end[2] == -1).any()  # 8-12 s runs past the 10 s video
+
+
+def test_auto_offset_from_timestamps(drozy_root, tmp_path):
+    ts = drozy_root / "timestamps"
+    ts.mkdir()
+    # video starts 2 s after EEG and runs 18 s -> covers EEG 2..20 s -> windows 1..4
+    _write_timestamps(ts / "1-1.txt", EDF_START + timedelta(seconds=2), seconds=18, fps=FPS)
+    prepare_drozy(CFG, drozy_root, tmp_path / "p")
+    s = np.load(tmp_path / "p" / "1-1.npz")
+    assert float(s["video_offset_s"]) == pytest.approx(2.0)
+    assert s["eeg"].shape[0] == 4
 
 
 def test_parse_kss_rejects_out_of_range(tmp_path):
