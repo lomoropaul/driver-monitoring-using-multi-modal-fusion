@@ -42,6 +42,8 @@ class DrozySession:
     video_path: Path | None
     kss: int | None
     timestamps_path: Path | None = None
+    landmarks_path: Path | None = None      # annotations-auto/<s>-<t>-s2.txt (2D, pixels)
+    landmarks3d_path: Path | None = None    # annotations-auto/<s>-<t>-s3.txt (3D, mm)
 
     @property
     def name(self) -> str:
@@ -116,12 +118,14 @@ def discover_sessions(root: str | Path, kss_file: str = "KSS.txt") -> list[Drozy
     edfs = _index_by_stem(root, (".edf",))
     videos = _index_by_stem(root, VIDEO_EXTS)
     stamps = _index_by_stem(root, (".txt",), folder="timestamps")
+    lm2 = {p.name[:-7]: p for p in root.rglob("*-s2.txt")}
+    lm3 = {p.name[:-7]: p for p in root.rglob("*-s3.txt")}
 
     sessions = []
     for stem, edf in edfs.items():
         subject, test = map(int, SESSION_RE.match(stem).groups())
         sessions.append(DrozySession(subject, test, edf, videos.get(stem), kss.get((subject, test)),
-                                     stamps.get(stem)))
+                                     stamps.get(stem), lm2.get(stem), lm3.get(stem)))
     return sorted(sessions, key=lambda s: (s.subject, s.test))
 
 

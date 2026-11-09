@@ -8,6 +8,8 @@ Each session becomes one ``<subject>-<test>.npz`` with:
 * ``frame_idx``  int64 ``[n, frames_per_window]`` video frames for each window
                  (all -1 if the session has no video; with video, windows not
                  fully covered by it are dropped)
+* ``window_index`` int64 ``[n]`` position of each window on the EEG clock
+                 (window i covers ``[i*window_s, (i+1)*window_s)`` seconds)
 * ``label``      int ``[n]`` 1 = vigilance decline (KSS >= 7), 0 = alert
 * ``subject``, ``test``, ``kss``, ``sfreq``, ``channels``, ``fps``
 
@@ -65,6 +67,7 @@ def prepare_session(session: DrozySession, cfg: dict) -> dict:
     data = raw.get_data()
 
     windows, keep = make_windows(data, sfreq, window_s, max_ptp=e["reject_ptp_uv"] * 1e-6)
+    window_index = np.arange(len(windows))
 
     fps, offset = float("nan"), float("nan")
     if session.video_path is not None:
@@ -81,6 +84,7 @@ def prepare_session(session: DrozySession, cfg: dict) -> dict:
         # keep only windows whose frames all fall inside the video
         inside = ((frame_idx >= 0) & (frame_idx < n_frames)).all(axis=1)
         windows, keep, frame_idx = windows[inside], keep[inside], frame_idx[inside]
+        window_index = window_index[inside]
     else:
         frame_idx = np.full((len(windows), d["frames_per_window"]), -1, dtype=np.int64)
     n = len(windows)
@@ -91,6 +95,7 @@ def prepare_session(session: DrozySession, cfg: dict) -> dict:
         "band_power": band_powers(windows, sfreq, e["bands"]) if n
         else np.empty((0, windows.shape[1], len(e["bands"])), dtype=np.float32),
         "frame_idx": frame_idx,
+        "window_index": window_index,
         "label": np.full(n, kss_to_label(session.kss, lab["kss_decline_min"]), dtype=np.int64),
         "subject": session.subject,
         "test": session.test,
@@ -132,13 +137,69 @@ def prepare_drozy(cfg: dict, root: str | Path | None = None, out: str | Path | N
     return written
 
 
-def load_prepared(folder: str | Path) -> dict[str, np.ndarray]:
-    """Concatenate all prepared sessions into one dataset with per-window subject ids."""
-    parts = [dict(np.load(p, allow_pickle=False)) for p in sorted(Path(folder).glob("*.npz"))]
+def prepare_face(cfg: dict, root: str | Path | None = None, processed: str | Path | None = None,
+                 overwrite: bool = False) -> list[Path]:
+    """Add facial data for every prepared session, saved to ``<processed>/drozy_face/``.
+
+    Each ``<subject>-<test>.npz`` holds, aligned row-for-row with the EEG file:
+
+    * ``crops``  uint8 ``[n, frames_per_window, size, size]`` eyes (top) + mouth (bottom)
+    * ``feats``  float32 ``[n, len(FEATURE_NAMES)]`` EAR, MAR, PERCLOS, blinks, head pose
+
+    The closed-eye threshold for PERCLOS and blinks is set per subject from
+    all of that subject's frames, so it does not use labels.
+    """
+    from .face import (closed_eye_threshold, eye_aspect_ratio, head_pose, load_landmarks,
+                       mouth_aspect_ratio, read_crops, window_features)
+
+    root = Path(root or Path(cfg["data"]["root"]) / "drozy")
+    processed = Path(processed or cfg["data"]["processed"])
+    eeg_dir, out = processed / "drozy", processed / "drozy_face"
+    out.mkdir(parents=True, exist_ok=True)
+    size, window_s = cfg["face"]["crop_size"], cfg["data"]["window_seconds"]
+
+    sessions = [s for s in discover_sessions(root)
+                if (eeg_dir / f"{s.name}.npz").exists() and s.landmarks_path is not None]
+    written = []
+    for subject in sorted({s.subject for s in sessions}):
+        subj = [s for s in sessions if s.subject == subject]
+        todo = [s for s in subj if overwrite or not (out / f"{s.name}.npz").exists()]
+        written += [out / f"{s.name}.npz" for s in subj if s not in todo]
+        if not todo:
+            continue
+        lms = {s.name: load_landmarks(s.landmarks_path, s.landmarks3d_path) for s in subj}
+        thr = closed_eye_threshold(np.concatenate([eye_aspect_ratio(lms[s.name][0]) for s in subj]))
+        for s in todo:
+            s2, s3 = lms[s.name]
+            eeg = np.load(eeg_dir / f"{s.name}.npz")
+            times, _ = read_frame_times(s.timestamps_path)
+            n_total = int(eeg["window_index"].max()) + 1 if len(eeg["window_index"]) else 0
+            feats = window_features(eye_aspect_ratio(s2), mouth_aspect_ratio(s2), head_pose(s3),
+                                    times[: len(s2)], n_total, window_s,
+                                    float(eeg["video_offset_s"]), thr)[eeg["window_index"]]
+            crops = read_crops(s.video_path, eeg["frame_idx"], s2, size)
+            np.savez_compressed(out / f"{s.name}.npz", crops=crops, feats=feats)
+            print(f"[face] {s.name}: {len(crops)} windows, closed-eye EAR < {thr:.3f}, "
+                  f"mean PERCLOS {np.nanmean(feats[:, 2]):.2f}")
+            written.append(out / f"{s.name}.npz")
+    return written
+
+
+def load_prepared(folder: str | Path, face_folder: str | Path | None = None) -> dict[str, np.ndarray]:
+    """Concatenate all prepared sessions into one dataset with per-window subject ids.
+
+    If ``face_folder`` is given, ``crops`` and ``face_feats`` are added for the
+    sessions found there; sessions without face data are dropped so both
+    modalities always line up.
+    """
+    paths = sorted(Path(folder).glob("*.npz"))
+    if face_folder is not None:
+        paths = [p for p in paths if (Path(face_folder) / p.name).exists()]
+    parts = [dict(np.load(p, allow_pickle=False)) for p in paths]
     if not parts:
         raise FileNotFoundError(f"No prepared .npz files in {folder}")
     n = [len(p["label"]) for p in parts]
-    return {
+    data = {
         "eeg": np.concatenate([p["eeg"] for p in parts]),
         "keep": np.concatenate([p["keep"] for p in parts]),
         "band_power": np.concatenate([p["band_power"] for p in parts]),
@@ -148,3 +209,8 @@ def load_prepared(folder: str | Path) -> dict[str, np.ndarray]:
         "test": np.repeat([int(p["test"]) for p in parts], n),
         "window_in_session": np.concatenate([np.arange(k) for k in n]),
     }
+    if face_folder is not None:
+        faces = [np.load(Path(face_folder) / p.name) for p in paths]
+        data["crops"] = np.concatenate([f["crops"] for f in faces])
+        data["face_feats"] = np.concatenate([f["feats"] for f in faces])
+    return data

@@ -14,6 +14,7 @@ data/processed/*
 
 # Training outputs
 runs/
+*.log
 checkpoints/
 *.pt
 *.pth

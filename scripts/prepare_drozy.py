@@ -3,7 +3,8 @@
 Put the extracted DROZY download in data/raw/drozy/ (any sub-folder layout), then:
 
     .venv\\Scripts\\python.exe scripts\\prepare_drozy.py --list    # check what was found
-    .venv\\Scripts\\python.exe scripts\\prepare_drozy.py           # build data/processed/drozy/
+    .venv\\Scripts\\python.exe scripts\\prepare_drozy.py           # EEG -> data/processed/drozy/
+    .venv\\Scripts\\python.exe scripts\\prepare_drozy.py --face    # face -> data/processed/drozy_face/
 """
 
 import argparse
@@ -12,7 +13,7 @@ from pathlib import Path
 import yaml
 
 from driver_monitoring.data.drozy import discover_sessions, kss_to_label
-from driver_monitoring.data.prepare import prepare_drozy
+from driver_monitoring.data.prepare import prepare_drozy, prepare_face
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,6 +24,8 @@ def main() -> None:
     ap.add_argument("--root", type=Path, help="DROZY folder (default: data/raw/drozy)")
     ap.add_argument("--out", type=Path, help="output folder (default: data/processed/drozy)")
     ap.add_argument("--list", action="store_true", help="only list discovered sessions")
+    ap.add_argument("--face", action="store_true",
+                    help="build face crops and features (run after the EEG step)")
     ap.add_argument("--overwrite", action="store_true")
     args = ap.parse_args()
 
@@ -42,6 +45,11 @@ def main() -> None:
         both = sum(s.has_both_modalities and s.kss is not None for s in sessions)
         print(f"\n{len(sessions)} sessions, {both} with EEG + video + KSS, "
               f"{len({s.subject for s in sessions})} subjects")
+        return
+
+    if args.face:
+        written = prepare_face(cfg, args.root, args.out, args.overwrite)
+        print(f"\n{len(written)} sessions with face data")
         return
 
     written = prepare_drozy(cfg, args.root, args.out, args.overwrite)
