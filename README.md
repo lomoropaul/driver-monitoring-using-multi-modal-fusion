@@ -1,4 +1,4 @@
-# Real-Time Multi-Modal Vigilance Monitoring (EEG + Facial Features)
+# Driver Monitoring Using Modal Fusion
 
 Final-year project, BSc Computer Science (AI & Robotics), Uganda Christian University.
 
@@ -41,7 +41,7 @@ configs/            experiment settings (default.yaml)
 data/raw/           downloaded datasets (git-ignored)
 data/processed/     windowed, preprocessed arrays (git-ignored)
 scripts/            command-line entry points
-src/vigilance/
+src/driver_monitoring/
   data/             loading, preprocessing, synchronisation, windowing
   models/           EEG branch, face branch, fusion, Teacher, Student
   training/         training loops, distillation, subject-wise CV

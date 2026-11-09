@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vigilance"
+name = "driver-monitoring-using-modal-fusion"
 version = "0.1.0"
-description = "Real-time multi-modal vigilance monitoring using EEG and facial feature fusion"
+description = "Driver monitoring using modal fusion of EEG and facial features"
 requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]

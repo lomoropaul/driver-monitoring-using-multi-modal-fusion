@@ -1,8 +1,8 @@
-import vigilance
+import driver_monitoring
 
 
 def test_package_imports():
-    assert vigilance.__version__ == "0.1.0"
+    assert driver_monitoring.__version__ == "0.1.0"
 
 
 def test_config_loads():
