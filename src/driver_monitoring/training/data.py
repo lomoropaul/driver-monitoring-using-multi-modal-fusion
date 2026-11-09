@@ -49,6 +49,13 @@ def build_inputs(ds: dict[str, np.ndarray], use_clean_only: bool = True) -> dict
 INPUT_KEYS = ("eeg", "crops", "face_feats")
 
 
+def branch_kwargs(inputs: dict) -> tuple[dict, dict]:
+    """Constructor arguments for the EEG and face branches, from the data shapes."""
+    eeg = {"n_channels": inputs["eeg"].shape[1], "n_samples": inputs["eeg"].shape[2]}
+    face = {"n_feats": inputs["face_feats"].shape[1]} if "face_feats" in inputs else {}
+    return eeg, face
+
+
 def to_batch(inputs: dict[str, np.ndarray], idx: np.ndarray, device="cpu") -> dict[str, torch.Tensor]:
     batch = {}
     for k in INPUT_KEYS:

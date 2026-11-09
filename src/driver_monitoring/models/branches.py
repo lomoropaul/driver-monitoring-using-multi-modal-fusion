@@ -123,4 +123,10 @@ def build_model(name: str, **kwargs) -> nn.Module:
         return EEGNet(**kwargs)
     if name == "face":
         return FaceNet(**kwargs)
-    raise ValueError(f"Unknown model {name!r} (expected 'eeg' or 'face')")
+    from .fusion import EarlyFusion, HybridFusion
+
+    if name == "early":
+        return EarlyFusion(**kwargs)
+    if name == "hybrid":
+        return HybridFusion(**kwargs)
+    raise ValueError(f"Unknown model {name!r} (expected 'eeg', 'face', 'early' or 'hybrid')")

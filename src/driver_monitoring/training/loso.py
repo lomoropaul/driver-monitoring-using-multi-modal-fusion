@@ -34,6 +34,16 @@ class TrainConfig:
     n_val_subjects: int = 2
     seed: int = 42
     model_kwargs: dict = field(default_factory=dict)
+    # Fusion only: {"eeg": run_dir, "face": run_dir} to start each branch from the
+    # baseline trained on the same fold (same train/val subjects, so no leakage).
+    init_from: dict = field(default_factory=dict)
+
+
+def init_branches(model: nn.Module, init_from: dict, test_subject: int) -> None:
+    """Load single-modality baseline weights of the same fold into a fusion model's branches."""
+    for branch, run_dir in init_from.items():
+        path = Path(run_dir) / f"fold_subject{test_subject}.pt"
+        getattr(model, branch).load_state_dict(torch.load(path, weights_only=True))
 
 
 def choose_val_subjects(test: int, subjects: np.ndarray, labels: np.ndarray, n: int = 2) -> list[int]:
@@ -67,11 +77,13 @@ def _loss(model: nn.Module, inputs: dict, idx: np.ndarray, batch_size: int = 256
 
 
 def train_one(cfg: TrainConfig, inputs: dict, train_idx: np.ndarray, val_idx: np.ndarray,
-              log=print) -> tuple[nn.Module, dict]:
+              log=print, test_subject: int | None = None) -> tuple[nn.Module, dict]:
     """Train with AdamW and early stopping on validation loss; returns the best model."""
     torch.manual_seed(cfg.seed)
     rng = np.random.default_rng(cfg.seed)
     model = build_model(cfg.model, **cfg.model_kwargs)
+    if cfg.init_from:
+        init_branches(model, cfg.init_from, test_subject)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     ce = nn.CrossEntropyLoss()
     best, best_state, bad, history = float("inf"), None, 0, []
@@ -121,7 +133,7 @@ def run_loso(cfg: TrainConfig, inputs: dict, out_dir: str | Path, folds: list[in
         train_idx = np.flatnonzero(~np.isin(subjects, [test, *val_s]))
         log(f"[fold {k}/{len(folds)}] test subject {test}, val {val_s}, "
             f"train {len(train_idx)} / val {len(val_idx)} / test {len(test_idx)} windows")
-        model, info = train_one(cfg, inputs, train_idx, val_idx, log)
+        model, info = train_one(cfg, inputs, train_idx, val_idx, log, test_subject=test)
         prob = _predict(model, inputs, test_idx)
         m = binary_metrics(labels[test_idx], prob >= 0.5)
         m.update({"subject": test, "val_subjects": val_s, "epochs_run": info["epochs_run"]})
@@ -133,6 +145,13 @@ def run_loso(cfg: TrainConfig, inputs: dict, out_dir: str | Path, folds: list[in
         log(f"    acc {m['accuracy']:.3f}  recall {m['recall']:.3f}  "
             f"specificity {m['specificity']:.3f}  ({time.time() - t0:.0f}s elapsed)")
 
+    return write_results(out_dir, cfg.model, asdict(cfg), n_params, rows, fold_metrics,
+                         (time.time() - t0) / 60)
+
+
+def write_results(out_dir: Path, model: str, config: dict, n_params: int, rows: list,
+                  fold_metrics: list[dict], minutes: float, extra: dict | None = None) -> dict:
+    """Write predictions.csv, fold_metrics.csv and summary.json; return the summary."""
     with open(out_dir / "predictions.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["subject", "test", "window", "label", "prob_decline"])
@@ -146,12 +165,13 @@ def run_loso(cfg: TrainConfig, inputs: dict, out_dir: str | Path, folds: list[in
     y = np.array([r[3] for r in rows])
     p = np.array([r[4] for r in rows])
     summary = {
-        "model": cfg.model,
+        "model": model,
         "parameters": n_params,
-        "config": asdict(cfg),
+        "config": config,
         "pooled": binary_metrics(y, p >= 0.5),
         "per_fold": summarise_folds(fold_metrics),
-        "minutes": (time.time() - t0) / 60,
+        "minutes": minutes,
+        **(extra or {}),
     }
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
     return summary
