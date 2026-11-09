@@ -77,8 +77,15 @@ def _loss(model: nn.Module, inputs: dict, idx: np.ndarray, batch_size: int = 256
 
 
 def train_one(cfg: TrainConfig, inputs: dict, train_idx: np.ndarray, val_idx: np.ndarray,
-              log=print, test_subject: int | None = None) -> tuple[nn.Module, dict]:
-    """Train with AdamW and early stopping on validation loss; returns the best model."""
+              log=print, test_subject: int | None = None,
+              kd: dict | None = None) -> tuple[nn.Module, dict]:
+    """Train with AdamW and early stopping on validation loss; returns the best model.
+
+    ``kd`` switches on knowledge distillation: ``{"logits": teacher logits for
+    every window [N, 2], "temperature": T, "alpha": α}``. Early stopping still
+    uses the hard-label validation loss, so runs with different T and α can be
+    compared on it.
+    """
     torch.manual_seed(cfg.seed)
     rng = np.random.default_rng(cfg.seed)
     model = build_model(cfg.model, **cfg.model_kwargs)
@@ -97,7 +104,12 @@ def train_one(cfg: TrainConfig, inputs: dict, train_idx: np.ndarray, val_idx: np
             if len(b) < 2:
                 continue  # BatchNorm needs more than one sample
             opt.zero_grad()
-            loss = ce(model(to_batch(inputs, b)), torch.from_numpy(inputs["label"][b]))
+            logits, y = model(to_batch(inputs, b)), torch.from_numpy(inputs["label"][b])
+            if kd is None:
+                loss = ce(logits, y)
+            else:
+                from .distill import kd_loss
+                loss = kd_loss(logits, torch.from_numpy(kd["logits"][b]), y, kd["temperature"], kd["alpha"])
             loss.backward()
             opt.step()
             running += loss.item() * len(b)
@@ -125,28 +137,52 @@ def run_loso(cfg: TrainConfig, inputs: dict, out_dir: str | Path, folds: list[in
     log(f"{cfg.model} model: {n_params:,} parameters, {len(folds)} folds, "
         f"{len(labels)} windows ({labels.mean():.1%} decline)")
 
-    rows, fold_metrics, t0 = [], [], time.time()
+    rows, fold_metrics, minutes = [], [], 0.0
     for k, test in enumerate(folds, 1):
-        val_s = choose_val_subjects(test, subjects, labels, cfg.n_val_subjects)
-        test_idx = np.flatnonzero(subjects == test)
-        val_idx = np.flatnonzero(np.isin(subjects, val_s))
-        train_idx = np.flatnonzero(~np.isin(subjects, [test, *val_s]))
-        log(f"[fold {k}/{len(folds)}] test subject {test}, val {val_s}, "
-            f"train {len(train_idx)} / val {len(val_idx)} / test {len(test_idx)} windows")
-        model, info = train_one(cfg, inputs, train_idx, val_idx, log, test_subject=test)
-        prob = _predict(model, inputs, test_idx)
-        m = binary_metrics(labels[test_idx], prob >= 0.5)
-        m.update({"subject": test, "val_subjects": val_s, "epochs_run": info["epochs_run"]})
-        fold_metrics.append(m)
-        torch.save(model.state_dict(), out_dir / f"fold_subject{test}.pt")
-        for i, p in zip(test_idx, prob):
-            rows.append((int(subjects[i]), int(inputs["test"][i]), int(inputs["window"][i]),
-                         int(labels[i]), float(p)))
-        log(f"    acc {m['accuracy']:.3f}  recall {m['recall']:.3f}  "
-            f"specificity {m['specificity']:.3f}  ({time.time() - t0:.0f}s elapsed)")
+        done = load_fold(out_dir, test)
+        if done is None:
+            t0 = time.time()
+            val_s = choose_val_subjects(test, subjects, labels, cfg.n_val_subjects)
+            test_idx = np.flatnonzero(subjects == test)
+            val_idx = np.flatnonzero(np.isin(subjects, val_s))
+            train_idx = np.flatnonzero(~np.isin(subjects, [test, *val_s]))
+            log(f"[fold {k}/{len(folds)}] test subject {test}, val {val_s}, "
+                f"train {len(train_idx)} / val {len(val_idx)} / test {len(test_idx)} windows")
+            model, info = train_one(cfg, inputs, train_idx, val_idx, log, test_subject=test)
+            prob = _predict(model, inputs, test_idx)
+            m = binary_metrics(labels[test_idx], prob >= 0.5)
+            m.update({"subject": test, "val_subjects": val_s, "epochs_run": info["epochs_run"]})
+            torch.save(model.state_dict(), out_dir / f"fold_subject{test}.pt")
+            done = {"metrics": m, "rows": fold_rows(inputs, test_idx, prob),
+                    "minutes": (time.time() - t0) / 60}
+            save_fold(out_dir, test, done)
+            log(f"    acc {m['accuracy']:.3f}  recall {m['recall']:.3f}  "
+                f"specificity {m['specificity']:.3f}  ({done['minutes']:.1f} min)")
+        else:
+            log(f"[fold {k}/{len(folds)}] test subject {test}: already done, loaded")
+        fold_metrics.append(done["metrics"])
+        rows += [tuple(r) for r in done["rows"]]
+        minutes += done["minutes"]
 
-    return write_results(out_dir, cfg.model, asdict(cfg), n_params, rows, fold_metrics,
-                         (time.time() - t0) / 60)
+    return write_results(out_dir, cfg.model, asdict(cfg), n_params, rows, fold_metrics, minutes)
+
+
+def fold_rows(inputs: dict, idx: np.ndarray, prob: np.ndarray) -> list[tuple]:
+    """(subject, test, window, label, prob_decline) for each test window."""
+    return [(int(inputs["subject"][i]), int(inputs["test"][i]), int(inputs["window"][i]),
+             int(inputs["label"][i]), float(p)) for i, p in zip(idx, prob)]
+
+
+def save_fold(out_dir: Path, test: int, data: dict) -> None:
+    """Save one finished fold so an interrupted or parallel run can resume and merge."""
+    tmp = out_dir / f"fold_subject{test}.json.tmp"
+    tmp.write_text(json.dumps(data, default=lambda o: o.item() if hasattr(o, "item") else str(o)))
+    tmp.replace(out_dir / f"fold_subject{test}.json")
+
+
+def load_fold(out_dir: Path, test: int) -> dict | None:
+    path = out_dir / f"fold_subject{test}.json"
+    return json.loads(path.read_text()) if path.exists() else None
 
 
 def write_results(out_dir: Path, model: str, config: dict, n_params: int, rows: list,
