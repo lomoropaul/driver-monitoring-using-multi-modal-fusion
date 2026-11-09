@@ -105,6 +105,24 @@ def test_auto_offset_from_timestamps(drozy_root, tmp_path):
     assert s["eeg"].shape[0] == 4
 
 
+def test_camera_start_from_cam_sync(tmp_path):
+    import mne
+
+    from driver_monitoring.data.drozy import camera_start_s
+
+    t = np.arange(10 * SFREQ) / SFREQ
+    sync = np.where(t < 0.5, -1.0, np.where(np.floor((t - 0.5) * 30) % 2 == 0, 1.0, -1.0))
+    eeg = np.random.default_rng(2).normal(0, 1e-5, t.size)
+    raw = mne.io.RawArray(np.vstack([eeg, sync]),
+                          mne.create_info(["Fz", "Cam-Sync"], SFREQ, ["eeg", "misc"]), verbose="error")
+    path = tmp_path / "1-1.edf"
+    mne.export.export_raw(path, raw, fmt="edf", overwrite=True, verbose="error")
+    assert camera_start_s(path) == pytest.approx(0.5, abs=2 / SFREQ)
+
+    _write_edf(tmp_path / "1-2.edf")  # no Cam-Sync channel
+    assert camera_start_s(tmp_path / "1-2.edf") is None
+
+
 def test_parse_kss_rejects_out_of_range(tmp_path):
     p = tmp_path / "KSS.txt"
     p.write_text("3 12 8\n")

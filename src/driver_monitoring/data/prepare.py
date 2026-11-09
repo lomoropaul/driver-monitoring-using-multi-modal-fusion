@@ -21,7 +21,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .drozy import DrozySession, discover_sessions, kss_to_label, load_eeg, read_frame_times
+from .drozy import (DrozySession, camera_start_s, discover_sessions, kss_to_label, load_eeg,
+                    read_frame_times)
 from .eeg import band_powers, make_windows, preprocess_raw
 from .video import video_info, window_frame_indices, window_frame_indices_from_times
 
@@ -31,12 +32,17 @@ MAX_AUTO_OFFSET_S = 120.0
 def video_offset(session: DrozySession, raw, setting) -> float:
     """Seconds between EEG start and first video frame (positive = video starts later).
 
-    With ``setting == "auto"`` it is computed from the EDF start time and the
-    first timestamp in the session's timestamp file (both local wall-clock time).
+    With ``setting == "auto"`` it uses the first edge of the EDF's Cam-Sync
+    channel (exact, on the EEG clock). Without that channel it falls back to
+    the EDF start time vs. the first line of the timestamp file (wall clock;
+    EDF stores whole seconds, so this is only accurate to about 1 s).
     Implausible values (over 2 minutes) fall back to 0 with a warning.
     """
     if setting != "auto":
         return float(setting)
+    synced = camera_start_s(session.edf_path)
+    if synced is not None:
+        return synced
     meas = raw.info.get("meas_date")
     if session.timestamps_path is None or meas is None:
         print(f"[warn] {session.name}: cannot compute video offset automatically, using 0")

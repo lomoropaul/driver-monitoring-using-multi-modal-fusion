@@ -125,6 +125,30 @@ def discover_sessions(root: str | Path, kss_file: str = "KSS.txt") -> list[Drozy
     return sorted(sessions, key=lambda s: (s.subject, s.test))
 
 
+def camera_start_s(edf_path: str | Path, channel: str = "Cam-Sync") -> float | None:
+    """Seconds from EEG start to the first camera frame, from the Cam-Sync channel.
+
+    DROZY's EDF files carry a square wave that toggles whenever the Kinect
+    records a frame, so its first edge marks the first video frame on the EEG
+    clock. The edge count does not always equal the video frame count, so
+    only the first edge is used. Returns ``None`` if the channel is absent or flat.
+    """
+    import mne
+
+    try:
+        raw = mne.io.read_raw_edf(edf_path, include=[channel], preload=True, verbose="error")
+    except ValueError:
+        return None
+    if channel not in raw.ch_names:
+        return None
+    sync = raw.get_data()[0]
+    if np.ptp(sync) == 0:
+        return None
+    high = sync > (sync.max() + sync.min()) / 2
+    edges = np.flatnonzero(high[1:] != high[:-1]) + 1
+    return float(edges[0] / raw.info["sfreq"]) if len(edges) else None
+
+
 def load_eeg(session: DrozySession, channels=DEFAULT_EEG_CHANNELS):
     """Load the session's EEG channels as an MNE Raw object (other channels dropped).
 
