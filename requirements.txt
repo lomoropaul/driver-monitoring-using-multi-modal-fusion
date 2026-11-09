@@ -26,4 +26,5 @@ pyyaml>=6.0
 tqdm>=4.66
 matplotlib>=3.9
 pytest>=8.3
+edfio>=0.4              # writes synthetic EDF files in tests
 ipykernel>=6.29         # run notebooks in VS Code

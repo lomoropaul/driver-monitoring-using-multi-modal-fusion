@@ -7,6 +7,7 @@ data:
   processed: data/processed
   window_seconds: 4          # tuned between 2 and 8 s on validation
   frames_per_window: 10
+  video_offset_s: 0.0        # video start relative to EEG start; check on real DROZY files
 
 labels:
   # DROZY / field data: session KSS rating
@@ -16,8 +17,11 @@ labels:
   minority_class_weight_threshold: 0.30   # use class-weighted loss below this
 
 eeg:
+  channels: [Fz, Cz, C3, C4, Pz]   # DROZY EEG montage
+  resample_hz: 128           # from 512 Hz; keeps the model light for the Jetson
+  reject_ptp_uv: 150         # windows above this peak-to-peak amplitude are flagged
   bandpass_hz: [0.5, 45.0]
-  notch_hz: 50.0             # Ugandan mains frequency
+  notch_hz: 50.0             # Ugandan mains frequency (DROZY was recorded in Belgium, also 50 Hz)
   bands:
     delta: [0.5, 4]
     theta: [4, 8]
