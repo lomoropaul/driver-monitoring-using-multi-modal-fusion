@@ -1,0 +1,29 @@
+# PyTorch is installed separately so you can pick CPU or GPU builds:
+#   CPU:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   CUDA: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+# EEG processing
+mne>=1.8
+antropy>=0.1.6          # fractal dimensions / entropy (Higuchi, Petrosian), as in Mardi et al.
+
+# Video / face processing
+opencv-python>=4.10
+mediapipe>=0.10.14
+
+# Data, metrics, statistics
+numpy>=1.26,<3
+pandas>=2.2
+scipy>=1.13
+scikit-learn>=1.5
+statsmodels>=0.14       # McNemar's test
+
+# Export / deployment
+onnx>=1.16
+onnxruntime>=1.19
+
+# Utilities
+pyyaml>=6.0
+tqdm>=4.66
+matplotlib>=3.9
+pytest>=8.3
+ipykernel>=6.29         # run notebooks in VS Code

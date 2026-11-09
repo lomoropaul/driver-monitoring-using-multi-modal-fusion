@@ -1,0 +1,42 @@
+# Default experiment settings, taken from proposal Chapter 3.
+
+seed: 42
+
+data:
+  root: data/raw
+  processed: data/processed
+  window_seconds: 4          # tuned between 2 and 8 s on validation
+  frames_per_window: 10
+
+labels:
+  # DROZY / field data: session KSS rating
+  kss_decline_min: 7         # KSS >= 7 -> vigilance decline, <= 6 -> alert
+  # SEED-VIG
+  perclos_decline_min: 0.35
+  minority_class_weight_threshold: 0.30   # use class-weighted loss below this
+
+eeg:
+  bandpass_hz: [0.5, 45.0]
+  notch_hz: 50.0             # Ugandan mains frequency
+  bands:
+    delta: [0.5, 4]
+    theta: [4, 8]
+    alpha: [8, 13]
+    beta: [13, 30]
+
+face:
+  crop_size: 64
+  features: [ear, mar, blink_rate, head_pose, perclos]
+
+fusion:
+  strategies: [early, late, hybrid]
+
+distillation:
+  temperatures: [2, 4, 8]
+  alphas: [0.3, 0.5, 0.7]
+  target_size_reduction: 0.70
+
+evaluation:
+  split: loso                # leave-one-subject-out on DROZY
+  significance: 0.05
+  latency_target_ms: 100

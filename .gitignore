@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Datasets: large and under their own licences, never commit
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Training outputs
+runs/
+checkpoints/
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Proposal drafts and personal documents (contain contact details)
+docs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
