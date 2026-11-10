@@ -23,8 +23,8 @@ import torch.nn.functional as F
 from ..evaluation.metrics import binary_metrics
 from ..models.branches import build_model, count_parameters
 from .data import to_batch
-from .loso import (TrainConfig, _predict, choose_val_subjects, fold_rows, load_fold, save_fold,
-                   train_one, write_results)
+from .loso import (TrainConfig, _predict, choose_val_subjects, cpu_state, fold_rows, load_fold,
+                   resolve_device, save_fold, train_one, write_results)
 
 
 def kd_loss(student_logits: torch.Tensor, teacher_logits: torch.Tensor, y: torch.Tensor,
@@ -40,10 +40,11 @@ def teacher_logits(model: torch.nn.Module, inputs: dict, idx: np.ndarray,
     """Teacher logits for ``idx``, as an [N, 2] array over all windows (zeros elsewhere)."""
     model.eval()
     out = np.zeros((len(inputs["label"]), 2), np.float32)
+    dev = next(model.parameters()).device
     with torch.no_grad():
         for i in range(0, len(idx), batch_size):
             b = idx[i:i + batch_size]
-            out[b] = model(to_batch(inputs, b)).numpy()
+            out[b] = model(to_batch(inputs, b, dev)).cpu().numpy()
     return out
 
 
@@ -101,7 +102,9 @@ def _distil_fold(cfg, inputs, teacher_run, teacher_model, teacher_kwargs, out_di
     val_idx = np.flatnonzero(np.isin(subjects, val_s))
     train_idx = np.flatnonzero(~np.isin(subjects, [test, *val_s]))
     teacher = build_model(teacher_model, **teacher_kwargs)
-    teacher.load_state_dict(torch.load(teacher_run / f"fold_subject{test}.pt", weights_only=True))
+    teacher.load_state_dict(torch.load(teacher_run / f"fold_subject{test}.pt", weights_only=True,
+                                       map_location="cpu"))
+    teacher.to(resolve_device(cfg.device))
     logits = teacher_logits(teacher, inputs, train_idx)
     log(f"{tag} test subject {test}, val {val_s}")
 
@@ -116,7 +119,7 @@ def _distil_fold(cfg, inputs, teacher_run, teacher_model, teacher_kwargs, out_di
             best = (info["best_val_loss"], t, a, model, prob, info)
 
     _, t, a, model, prob, info = best
-    torch.save(model.state_dict(), out_dir / f"fold_subject{test}.pt")
+    torch.save(cpu_state(model), out_dir / f"fold_subject{test}.pt")
     m = binary_metrics(labels[test_idx], prob >= 0.5)
     m.update({"subject": test, "val_subjects": val_s, "temperature": t, "alpha": a,
               "epochs_run": info["epochs_run"]})

@@ -48,6 +48,11 @@ distillation:
     hidden: 24
     eeg: {f1: 4, depth: 2, f2: 8}       # EEGNet-4,2
     face: {width: 8, hidden: 24}
+  student_mid:                          # ~74% smaller than the Teacher; same size as early_fusion
+    strategy: early
+    hidden: 64
+    eeg: {f1: 8, depth: 2, f2: 16}      # EEGNet-8,2
+    face: {width: 16, hidden: 64}
   temperatures: [2, 4, 8]
   alphas: [0.3, 0.5, 0.7]
   target_size_reduction: 0.70

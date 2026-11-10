@@ -82,3 +82,11 @@ Training resumes from the last finished fold if interrupted, and `--folds` plus
 `--threads` let several processes share the folds.
 
 Run the tests with `.venv\Scripts\python.exe -m pytest`.
+
+## Training on Google Colab
+
+`notebooks/colab_train.ipynb` runs the experiments on a Colab GPU. Training uses the
+GPU automatically when one is available (`--device auto`). Upload the processed data
+(`data/processed/` plus `runs/teacher/`, zipped as `drozy_processed.zip`) to a private
+Google Drive folder `MyDrive/driver-monitoring/`; results are saved to Drive after
+every fold, so a disconnected session resumes where it stopped.

@@ -34,16 +34,32 @@ class TrainConfig:
     n_val_subjects: int = 2
     seed: int = 42
     model_kwargs: dict = field(default_factory=dict)
+    device: str = "auto"  # "auto" = CUDA GPU when available, else CPU
     # Fusion only: {"eeg": run_dir, "face": run_dir} to start each branch from the
     # baseline trained on the same fold (same train/val subjects, so no leakage).
     init_from: dict = field(default_factory=dict)
+
+
+def resolve_device(device: str = "auto") -> torch.device:
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(device)
+
+
+def cpu_state(model: nn.Module) -> dict:
+    """State dict on the CPU, so checkpoints load anywhere."""
+    return {k: v.detach().cpu() for k, v in model.state_dict().items()}
+
+
+def _device(model: nn.Module) -> torch.device:
+    return next(model.parameters()).device
 
 
 def init_branches(model: nn.Module, init_from: dict, test_subject: int) -> None:
     """Load single-modality baseline weights of the same fold into a fusion model's branches."""
     for branch, run_dir in init_from.items():
         path = Path(run_dir) / f"fold_subject{test_subject}.pt"
-        getattr(model, branch).load_state_dict(torch.load(path, weights_only=True))
+        getattr(model, branch).load_state_dict(torch.load(path, weights_only=True, map_location="cpu"))
 
 
 def choose_val_subjects(test: int, subjects: np.ndarray, labels: np.ndarray, n: int = 2) -> list[int]:
@@ -58,21 +74,21 @@ def choose_val_subjects(test: int, subjects: np.ndarray, labels: np.ndarray, n: 
 
 def _predict(model: nn.Module, inputs: dict, idx: np.ndarray, batch_size: int = 256) -> np.ndarray:
     model.eval()
-    probs = []
+    probs, dev = [], _device(model)
     with torch.no_grad():
         for i in range(0, len(idx), batch_size):
-            logits = model(to_batch(inputs, idx[i:i + batch_size]))
-            probs.append(torch.softmax(logits, 1)[:, 1].numpy())
+            logits = model(to_batch(inputs, idx[i:i + batch_size], dev))
+            probs.append(torch.softmax(logits, 1)[:, 1].cpu().numpy())
     return np.concatenate(probs) if probs else np.empty(0)
 
 
 def _loss(model: nn.Module, inputs: dict, idx: np.ndarray, batch_size: int = 256) -> float:
     model.eval()
-    total, ce = 0.0, nn.CrossEntropyLoss(reduction="sum")
+    total, ce, dev = 0.0, nn.CrossEntropyLoss(reduction="sum"), _device(model)
     with torch.no_grad():
         for i in range(0, len(idx), batch_size):
             b = idx[i:i + batch_size]
-            total += ce(model(to_batch(inputs, b)), torch.from_numpy(inputs["label"][b])).item()
+            total += ce(model(to_batch(inputs, b, dev)), torch.from_numpy(inputs["label"][b]).to(dev)).item()
     return total / max(len(idx), 1)
 
 
@@ -91,6 +107,9 @@ def train_one(cfg: TrainConfig, inputs: dict, train_idx: np.ndarray, val_idx: np
     model = build_model(cfg.model, **cfg.model_kwargs)
     if cfg.init_from:
         init_branches(model, cfg.init_from, test_subject)
+    dev = resolve_device(cfg.device)
+    model.to(dev)
+    kd_logits = torch.from_numpy(kd["logits"]).to(dev) if kd is not None else None
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     ce = nn.CrossEntropyLoss()
     best, best_state, bad, history = float("inf"), None, 0, []
@@ -104,12 +123,12 @@ def train_one(cfg: TrainConfig, inputs: dict, train_idx: np.ndarray, val_idx: np
             if len(b) < 2:
                 continue  # BatchNorm needs more than one sample
             opt.zero_grad()
-            logits, y = model(to_batch(inputs, b)), torch.from_numpy(inputs["label"][b])
+            logits, y = model(to_batch(inputs, b, dev)), torch.from_numpy(inputs["label"][b]).to(dev)
             if kd is None:
                 loss = ce(logits, y)
             else:
                 from .distill import kd_loss
-                loss = kd_loss(logits, torch.from_numpy(kd["logits"][b]), y, kd["temperature"], kd["alpha"])
+                loss = kd_loss(logits, kd_logits[torch.from_numpy(b).to(dev)], y, kd["temperature"], kd["alpha"])
             loss.backward()
             opt.step()
             running += loss.item() * len(b)
@@ -152,7 +171,7 @@ def run_loso(cfg: TrainConfig, inputs: dict, out_dir: str | Path, folds: list[in
             prob = _predict(model, inputs, test_idx)
             m = binary_metrics(labels[test_idx], prob >= 0.5)
             m.update({"subject": test, "val_subjects": val_s, "epochs_run": info["epochs_run"]})
-            torch.save(model.state_dict(), out_dir / f"fold_subject{test}.pt")
+            torch.save(cpu_state(model), out_dir / f"fold_subject{test}.pt")
             done = {"metrics": m, "rows": fold_rows(inputs, test_idx, prob),
                     "minutes": (time.time() - t0) / 60}
             save_fold(out_dir, test, done)

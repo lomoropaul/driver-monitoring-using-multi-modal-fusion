@@ -32,7 +32,7 @@ def best_alpha(y: np.ndarray, p_eeg: np.ndarray, p_face: np.ndarray) -> float:
 
 def _load(name: str, kwargs: dict, run_dir: Path, subject: int):
     model = build_model(name, **kwargs)
-    model.load_state_dict(torch.load(run_dir / f"fold_subject{subject}.pt", weights_only=True))
+    model.load_state_dict(torch.load(run_dir / f"fold_subject{subject}.pt", weights_only=True, map_location="cpu"))
     return model.eval()
 
 

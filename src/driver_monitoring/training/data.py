@@ -60,6 +60,6 @@ def to_batch(inputs: dict[str, np.ndarray], idx: np.ndarray, device="cpu") -> di
     batch = {}
     for k in INPUT_KEYS:
         if k in inputs:
-            v = torch.from_numpy(inputs[k][idx])
-            batch[k] = (v.float() / 255.0 if k == "crops" else v.float()).to(device)
+            v = torch.from_numpy(inputs[k][idx]).to(device)  # move first: uint8 crops are 4x smaller
+            batch[k] = v.float() / 255.0 if k == "crops" else v.float()
     return batch

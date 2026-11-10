@@ -35,7 +35,8 @@ from driver_monitoring.models.branches import build_model
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "runs"
 ORDER = ["eeg_baseline", "face_baseline", "early_fusion", "late_fusion", "hybrid_fusion",
-         "teacher", "student_scratch", "student_kd"]
+         "teacher", "student_scratch", "student_kd", "student_mid_scratch", "student_mid_kd"]
+STUDENTS = ["student", "student_mid"]
 KEY = ["subject", "test", "window"]
 
 
@@ -74,10 +75,49 @@ def print_paired(name_a: str, name_b: str, r: dict) -> None:
               f"over {v['n_folds']} folds, p = {v['p_value']:.2g}")
 
 
+def h2_report(df: pd.DataFrame, runs: list[str], name: str) -> dict:
+    """Distilled Student ``name`` against the Teacher and against the same Student without distillation."""
+    kd_run, scratch_run = f"{name}_kd", f"{name}_scratch"
+    t, s = df.loc["teacher"], df.loc[kd_run]
+    h2 = {
+        "parameter_reduction": float(1 - s["params"] / t["params"]),
+        "size_reduction": float(1 - s["size_mb"] / t["size_mb"]),
+        "at_least_70pct_smaller": bool(1 - s["params"] / t["params"] >= 0.70
+                                       and 1 - s["size_mb"] / t["size_mb"] >= 0.70),
+        "accuracy_retention": float(s["accuracy"] / t["accuracy"]),
+        "recall_retention": float(s["recall"] / t["recall"]),
+        "student_vs_teacher": paired(kd_run, "teacher"),
+    }
+    if "cpu_mean_ms" in df:
+        h2["cpu_speedup"] = float(t["cpu_mean_ms"] / s["cpu_mean_ms"])
+    print(f"\nH2: distilled {name} vs Teacher")
+    print(f"  parameters {int(s['params']):,} vs {int(t['params']):,}  ({h2['parameter_reduction']:.1%} fewer); "
+          f"size {s['size_mb']:.3f} vs {t['size_mb']:.3f} MB  ({h2['size_reduction']:.1%} smaller)")
+    print(f"  retention: accuracy {h2['accuracy_retention']:.1%}, recall {h2['recall_retention']:.1%}")
+    if "cpu_speedup" in h2:
+        print(f"  CPU latency {s['cpu_mean_ms']:.1f} vs {t['cpu_mean_ms']:.1f} ms per window "
+              f"({h2['cpu_speedup']:.1f}x faster)")
+    print_paired("Student", "Teacher", h2["student_vs_teacher"])
+    if scratch_run in runs:
+        h2["kd_vs_scratch"] = paired(kd_run, scratch_run)
+        print(f"  Ablation, same Student with vs without distillation: accuracy "
+              f"{s['accuracy']:.3f} vs {df.loc[scratch_run, 'accuracy']:.3f}, "
+              f"FNR {s['fnr']:.3f} vs {df.loc[scratch_run, 'fnr']:.3f}")
+        print_paired("KD", "scratch", h2["kd_vs_scratch"])
+    kd = json.loads((RUNS / kd_run / "summary.json").read_text())
+    h2["chosen_per_fold"] = kd.get("chosen_per_fold")
+    h2["grid_test_pooled"] = {k: {m: v[m] for m in ("accuracy", "recall", "fnr")}
+                              for k, v in kd.get("grid_test_pooled", {}).items()}
+    return h2
+
+
 def main() -> None:
+    global RUNS
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--no-latency", action="store_true")
+    ap.add_argument("--runs", type=Path, default=RUNS, help="folder holding the runs (e.g. on Google Drive)")
     args = ap.parse_args()
+    RUNS = args.runs
 
     runs = [r for r in ORDER if (RUNS / r / "summary.json").exists()]
     table, example = [], example_window()
@@ -111,37 +151,8 @@ def main() -> None:
         print(f"  FNR      {df.loc[best_f, 'fnr']:.3f} vs {df.loc[best_s, 'fnr']:.3f}")
         print_paired("fusion", "single", h1)
 
-    if {"teacher", "student_kd"} <= set(runs):
-        t, s = df.loc["teacher"], df.loc["student_kd"]
-        h2 = {
-            "parameter_reduction": float(1 - s["params"] / t["params"]),
-            "size_reduction": float(1 - s["size_mb"] / t["size_mb"]),
-            "at_least_70pct_smaller": bool(1 - s["params"] / t["params"] >= 0.70
-                                           and 1 - s["size_mb"] / t["size_mb"] >= 0.70),
-            "accuracy_retention": float(s["accuracy"] / t["accuracy"]),
-            "recall_retention": float(s["recall"] / t["recall"]),
-            "student_vs_teacher": paired("student_kd", "teacher"),
-        }
-        if "cpu_mean_ms" in df:
-            h2["cpu_speedup"] = float(t["cpu_mean_ms"] / s["cpu_mean_ms"])
-        print(f"\nH2: distilled Student vs Teacher")
-        print(f"  parameters {int(s['params']):,} vs {int(t['params']):,}  ({h2['parameter_reduction']:.1%} fewer); "
-              f"size {s['size_mb']:.3f} vs {t['size_mb']:.3f} MB  ({h2['size_reduction']:.1%} smaller)")
-        print(f"  retention: accuracy {h2['accuracy_retention']:.1%}, recall {h2['recall_retention']:.1%}")
-        if "cpu_speedup" in h2:
-            print(f"  CPU latency {s['cpu_mean_ms']:.1f} vs {t['cpu_mean_ms']:.1f} ms per window "
-                  f"({h2['cpu_speedup']:.1f}x faster)")
-        print_paired("Student", "Teacher", h2["student_vs_teacher"])
-        if "student_scratch" in runs:
-            h2["kd_vs_scratch"] = paired("student_kd", "student_scratch")
-            print(f"  Ablation, same Student with vs without distillation: accuracy "
-                  f"{s['accuracy']:.3f} vs {df.loc['student_scratch', 'accuracy']:.3f}, "
-                  f"FNR {s['fnr']:.3f} vs {df.loc['student_scratch', 'fnr']:.3f}")
-            print_paired("KD", "scratch", h2["kd_vs_scratch"])
-        kd = json.loads((RUNS / "student_kd" / "summary.json").read_text())
-        h2["chosen_per_fold"] = kd.get("chosen_per_fold")
-        h2["grid_test_pooled"] = {k: {m: v[m] for m in ("accuracy", "recall", "fnr")}
-                                  for k, v in kd.get("grid_test_pooled", {}).items()}
+    h2 = {name: h2_report(df, runs, name) for name in STUDENTS if {"teacher", f"{name}_kd"} <= set(runs)}
+    if h2:
         result["h2"] = h2
 
     (RUNS / "comparison.json").write_text(json.dumps(result, indent=2, default=str))

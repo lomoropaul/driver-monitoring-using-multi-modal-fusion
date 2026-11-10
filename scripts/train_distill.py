@@ -3,9 +3,10 @@
     .venv\\Scripts\\python.exe scripts\\train_distill.py --stage teacher   # scaled-up early fusion
     .venv\\Scripts\\python.exe scripts\\train_distill.py --stage student   # Student with KD, (T, alpha) grid
     .venv\\Scripts\\python.exe scripts\\train_distill.py --stage scratch   # same Student without KD (ablation)
+    .venv\\Scripts\\python.exe scripts\\train_distill.py --stage student --student student_mid   # larger Student
 
 Sizes come from the ``distillation`` section of configs/default.yaml.
-Results go to runs/teacher, runs/student_kd and runs/student_scratch.
+Results go to runs/teacher, runs/<student>_kd and runs/<student>_scratch.
 The Student stage needs the Teacher run for the same folds.
 
 Each finished fold is saved on its own, so an interrupted run resumes where it
@@ -29,7 +30,7 @@ from driver_monitoring.training.distill import run_distillation
 from driver_monitoring.training.loso import TrainConfig, run_loso
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = {"teacher": "teacher", "student": "student_kd", "scratch": "student_scratch"}
+STAGES = ("teacher", "student", "scratch")
 
 
 def model_spec(size: dict, eeg_kw: dict, face_kw: dict, modality_dropout: float) -> tuple[str, dict]:
@@ -39,7 +40,11 @@ def model_spec(size: dict, eeg_kw: dict, face_kw: dict, modality_dropout: float)
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stage", choices=list(OUT), required=True)
+    ap.add_argument("--stage", choices=STAGES, required=True)
+    ap.add_argument("--student", default="student", help="Student size from the config (student, student_mid)")
+    ap.add_argument("--device", default="auto", help="auto (GPU if available), cuda or cpu")
+    ap.add_argument("--runs", type=Path, default=ROOT / "runs", help="folder for all runs (e.g. on Google Drive)")
+    ap.add_argument("--data", type=Path, help="processed data folder (default: from the config)")
     ap.add_argument("--config", type=Path, default=ROOT / "configs" / "default.yaml")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--patience", type=int, default=6)
@@ -53,20 +58,21 @@ def main() -> None:
     torch.set_num_threads(args.threads)
     cfg = yaml.safe_load(args.config.read_text())
     kd_cfg = cfg["distillation"]
-    processed = ROOT / cfg["data"]["processed"]
+    processed = args.data or ROOT / cfg["data"]["processed"]
     inputs = build_inputs(load_prepared(processed / "drozy", processed / "drozy_face"))
     eeg_kw, face_kw = branch_kwargs(inputs)
     t_name, t_kw = model_spec(kd_cfg["teacher"], eeg_kw, face_kw, args.modality_dropout)
-    s_name, s_kw = model_spec(kd_cfg["student"], eeg_kw, face_kw, args.modality_dropout)
+    s_name, s_kw = model_spec(kd_cfg[args.student], eeg_kw, face_kw, args.modality_dropout)
     n_t, n_s = count_parameters(build_model(t_name, **t_kw)), count_parameters(build_model(s_name, **s_kw))
     print(f"Teacher {n_t:,} parameters, Student {n_s:,} ({1 - n_s / n_t:.1%} smaller)")
 
-    out = args.out or ROOT / "runs" / OUT[args.stage]
+    out_name = {"teacher": "teacher", "student": f"{args.student}_kd", "scratch": f"{args.student}_scratch"}
+    out = args.out or args.runs / out_name[args.stage]
     name, kw = (t_name, t_kw) if args.stage == "teacher" else (s_name, s_kw)
     tc = TrainConfig(model=name, epochs=args.epochs, patience=args.patience, lr=args.lr,
-                     seed=cfg["seed"], model_kwargs=kw)
+                     seed=cfg["seed"], model_kwargs=kw, device=args.device)
     if args.stage == "student":
-        summary = run_distillation(tc, inputs, ROOT / "runs" / OUT["teacher"], t_name, t_kw, out,
+        summary = run_distillation(tc, inputs, args.runs / "teacher", t_name, t_kw, out,
                                    kd_cfg["temperatures"], kd_cfg["alphas"], args.folds)
     else:
         summary = run_loso(tc, inputs, out, args.folds)
