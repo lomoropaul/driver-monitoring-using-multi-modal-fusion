@@ -90,3 +90,16 @@ GPU automatically when one is available (`--device auto`). Upload the processed 
 (`data/processed/` plus `runs/teacher/`, zipped as `drozy_processed.zip`) to a private
 Google Drive folder `MyDrive/driver-monitoring/`; results are saved to Drive after
 every fold, so a disconnected session resumes where it stopped.
+
+## Testing a trained model on one driver
+
+```powershell
+.venv\Scripts\python.exe scripts\test_model.py --subject 7                       # Teacher
+.venv\Scripts\python.exe scripts\test_model.py --subject 7 --model student_kd    # distilled Student
+.venv\Scripts\python.exe scripts\test_model.py --subject 4 --test 3 --model early_fusion
+```
+
+It uses the model from the fold in which that driver was held out, so the driver
+was never seen in training. It prints, per session, the sleepiness rating, the
+true state, how many 4-second windows were flagged as vigilance decline and the
+accuracy, and saves a plot of the decline probability over time to `runs/tests/`.
