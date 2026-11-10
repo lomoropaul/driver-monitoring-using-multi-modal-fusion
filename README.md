@@ -48,3 +48,37 @@ src/driver_monitoring/
   evaluation/       metrics, statistical tests, robustness, latency
 tests/              pytest tests
 ```
+
+## Running the experiments (DROZY)
+
+DROZY is available for research use only and may not be redistributed; request it from
+the authors and cite Massoz et al. (2016). Unzip it to `data/raw/drozy/`, then:
+
+```powershell
+# 1. Preprocess EEG, align video to EEG, extract face crops and features
+.venv\Scripts\python.exe scripts\prepare_drozy.py
+.venv\Scripts\python.exe scripts\prepare_drozy.py --face
+
+# 2. Single-modality baselines (leave-one-subject-out, 14 folds)
+.venv\Scripts\python.exe scripts\train_baseline.py --model eeg
+.venv\Scripts\python.exe scripts\train_baseline.py --model face
+
+# 3. Fusion (late fusion reuses the baselines)
+.venv\Scripts\python.exe scripts\train_fusion.py --strategy late
+.venv\Scripts\python.exe scripts\train_fusion.py --strategy early
+.venv\Scripts\python.exe scripts\train_fusion.py --strategy hybrid
+
+# 4. Teacher, Student without distillation (ablation), distilled Student
+.venv\Scripts\python.exe scripts\train_distill.py --stage teacher
+.venv\Scripts\python.exe scripts\train_distill.py --stage scratch
+.venv\Scripts\python.exe scripts\train_distill.py --stage student
+
+# 5. Results table, size, CPU latency and significance tests (H1, H2)
+.venv\Scripts\python.exe scripts\compare_runs.py
+```
+
+Each run writes predictions, per-fold metrics and a summary to `runs/<name>/`.
+Training resumes from the last finished fold if interrupted, and `--folds` plus
+`--threads` let several processes share the folds.
+
+Run the tests with `.venv\Scripts\python.exe -m pytest`.
