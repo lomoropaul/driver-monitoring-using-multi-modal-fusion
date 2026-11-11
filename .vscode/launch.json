@@ -6,10 +6,23 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/scripts/test_model.py",
-      "args": ["--subject", "${input:subject}", "--model", "${input:model}"],
+      "args": [
+        "--subject",
+        "${input:subject}",
+        "--model",
+        "${input:model}"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "Results per driver",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/driver_results.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
     },
     {
       "name": "Compare all models (H1, H2)",
@@ -25,14 +38,37 @@
       "id": "subject",
       "type": "pickString",
       "description": "DROZY driver to test (the model never saw this driver)",
-      "options": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14"],
+      "options": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14"
+      ],
       "default": "7"
     },
     {
       "id": "model",
       "type": "pickString",
       "description": "Model to test",
-      "options": ["teacher", "early_fusion", "hybrid_fusion", "eeg_baseline", "face_baseline", "student_kd", "student_scratch"],
+      "options": [
+        "teacher",
+        "early_fusion",
+        "hybrid_fusion",
+        "eeg_baseline",
+        "face_baseline",
+        "student_kd",
+        "student_scratch"
+      ],
       "default": "teacher"
     }
   ]
