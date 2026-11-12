@@ -103,3 +103,19 @@ It uses the model from the fold in which that driver was held out, so the driver
 was never seen in training. It prints, per session, the sleepiness rating, the
 true state, how many 4-second windows were flagged as vigilance decline and the
 accuracy, and saves a plot of the decline probability over time to `runs/tests/`.
+
+## Edge deployment (Jetson Orin Nano)
+
+```powershell
+# Export a fusion model to ONNX (fold in which driver 7 was held out), checked against PyTorch
+.venv\Scripts\python.exe scripts\export_onnx.py --model teacher --subject 7
+.venv\Scripts\python.exe scripts\export_onnx.py --model student_kd --subject 7
+
+# Run the in-vehicle loop on a recorded session: one 4 s window at a time,
+# 1-minute averaging, OK / WARNING (0.5) / STOP (0.8), with per-window latency
+.venv\Scripts\python.exe scripts\edge_demo.py --subject 7 --test 3 --model teacher
+```
+
+On a Jetson the same `.onnx` file runs with ONNX Runtime (CUDA/TensorRT providers
+are used automatically when installed) or can be compiled with
+`trtexec --onnx=exports/teacher_S7.onnx --fp16 --saveEngine=teacher_S7.engine`.
